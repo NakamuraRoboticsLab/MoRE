@@ -26,7 +26,11 @@ default_angles: [ -0.1,  0.0,  0.0,  0.3, -0.2, 0.0,
 
 # Optional PD gains for the controlled joints
 kps: [100, 100, 100, 150, 40, 40, 100, 100, 100, 150, 40, 40, 60, 40, 60, 40]
+# kps: [10, 10, 10, 10, 5, 5, 10, 10, 10, 10, 5, 5, 10, 5, 10, 5]
 kds: [2, 2, 2, 4, 2, 2, 2, 2, 2, 4, 2, 2, 2, 1, 2, 1]
+
+# Scale factor applied to `kps` when sending commands
+kp_scale: 1
 
 # Commands / gait
 cmd_init: [0.0, 0.0, 0.0]
@@ -54,11 +58,11 @@ gaussian_noise_std: 0.05
 
 depth_dis_noise: 0
 
-visualize_depth: false
+visualize_depth: true
 
 # --- Unitree SDK2 (DDS) specific ---
 # Use with: --interface unitree_sdk2
-net_interface: "enp3s0"  # change to your NIC name
+net_interface: "enp0s31f6"  # change to your NIC name
 msg_type: "hg"           # g1/h1_2 often use hg, h1 often uses go
 imu_type: "pelvis"       # pelvis or torso
 lowcmd_topic: "rt/lowcmd"
@@ -66,8 +70,34 @@ lowstate_topic: "rt/lowstate"
 
 # Map policy joint order -> motor index in LowState/LowCmd
 # IMPORTANT: you must set this to match your robot motor ordering and your trained joint ordering.
-# Placeholder assumes first 16 motors correspond to the 16 controlled joints.
-joint2motor_idx: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]
+# For 29DoF G1 (legs 0-11, arm+waist 12-28), this maps the 16-action policy joints to motors.
+# Assumption (matches deploy/deploy_real/unitree_ref/configs/g1.yaml ordering):
+# - 0..11: legs
+# - 12..14: waist (yaw/roll/pitch)
+# - 15..21: left arm (shoulder pitch/roll/yaw, elbow, wrist roll/pitch/yaw)
+# - 22..28: right arm (shoulder pitch/roll/yaw, elbow, wrist roll/pitch/yaw)
+# Policy controls: 12 leg + (L shoulder_pitch, L elbow, R shoulder_pitch, R elbow)
+joint2motor_idx: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 15, 18, 22, 25]
+
+# Lock all other motors (waist/wrists/unused arm joints) with PD at a fixed target position.
+lock_unused_motors: true
+lock_unused_kp: 50.0
+lock_unused_kd: 1.0
+lock_unused_q: 0.0
+
+# Separate PD holds for waist and wrist joints (stronger waist, softer wrists).
+# Motor indices below follow the same 29DoF assumption documented above.
+lock_waist_motors: true
+waist_motor_indices: [12, 13, 14]
+waist_lock_kp: 200.0
+waist_lock_kd: 5.0
+waist_lock_q: 0.0
+
+lock_wrist_motors: true
+wrist_motor_indices: [19, 20, 21, 26, 27, 28]
+wrist_lock_kp: 4.0
+wrist_lock_kd: 0.2
+wrist_lock_q: 0.0
 
 # Startup/safety flow (same as unitree_ref)
 require_remote: true
@@ -77,6 +107,17 @@ move_to_default_s: 2.0
 # Use remote joystick to generate cmd (vx, vy, wz)
 use_remote_cmd: true
 remote_max_cmd: [0.8, 0.5, 1.57]
+
+# Debug: print received remote state (buttons + sticks)
+debug_remote: true
+debug_remote_interval_s: 0.5
+
+# If START/A/SELECT mapping is different on your remote,
+# set these to the button bit index that toggles in mask=0x....
+# (see deploy/deploy_real/unitree_ref/common/remote_controller.py KeyMap)
+# start_button_idx: 2
+# run_button_idx: 8
+# stop_button_idx: 3
 
 # --- TeleImager depth (optional) ---
 # If you run teleimager-server on the robot (or a camera host), you can attach depth into ObsPacket.

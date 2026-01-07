@@ -70,6 +70,9 @@ class DeployConfig:
     kps: np.ndarray | None
     kds: np.ndarray | None
 
+    # Optional scaling applied to `kps` when sending commands.
+    kp_scale: float
+
     # Raw config passthrough for hardware-specific interfaces
     extra: dict[str, Any]
 
@@ -124,6 +127,7 @@ def load_config(path: str) -> DeployConfig:
         gait_cmd=np.array(_p("gait_cmd"), dtype=np.float32),
         kps=np.array(raw["kps"], dtype=np.float32) if "kps" in raw else None,
         kds=np.array(raw["kds"], dtype=np.float32) if "kds" in raw else None,
+        kp_scale=float(_p("kp_scale", 1.0)),
         extra=dict(raw),
         depth_image_is_normalized=bool(_p("depth_image_is_normalized", False)),
         depth_far_clip=float(_p("depth_far_clip")),
@@ -320,7 +324,8 @@ def main() -> None:
 
             # Depth buffer update (optional)
             if (tick % cfg.cam_update_interval) == 0 and pkt.depth_image is not None:
-                depth_t = process_depth_image_np(np.asarray(pkt.depth_image), cfg)
+                depth_raw = np.asarray(pkt.depth_image)
+                depth_t = process_depth_image_np(depth_raw, cfg)
                 if not depth_buf_initialized:
                     depth_image_buffer = torch.stack([depth_t] * cfg.depth_buffer_len, dim=0).unsqueeze(0)
                     depth_buf_initialized = True
@@ -334,7 +339,18 @@ def main() -> None:
                     cv2 = _maybe_import_cv2()
                     if cv2 is not None:
                         cv2.namedWindow("depth image", cv2.WINDOW_NORMAL)
-                        cv2.imshow("depth image", (depth_image_buffer[0, -1].numpy() + 0.5))
+                        raw = depth_raw.astype(np.float32, copy=False)
+                        if cfg.depth_image_is_normalized:
+                            img01 = np.clip(raw + 0.5, 0.0, 1.0)
+                        else:
+                            denom = float(cfg.depth_far_clip - cfg.depth_near_clip)
+                            denom = denom if denom != 0.0 else 1.0
+                            raw_clip = np.clip(raw, cfg.depth_near_clip, cfg.depth_far_clip)
+                            img01 = (raw_clip - cfg.depth_near_clip) / denom
+
+                        img_u8 = (img01 * 255.0).astype(np.uint8)
+                        img_color = cv2.applyColorMap(img_u8, cv2.COLORMAP_TURBO)
+                        cv2.imshow("depth image", img_color)
                         cv2.waitKey(1)
 
             # Trajectory history (exclude gait_cmd part)
@@ -347,7 +363,10 @@ def main() -> None:
             action = policy(obs_tensor, trajectory_history, depth_slice).detach().cpu().numpy().squeeze().astype(np.float32)
 
             target_dof_pos = action * cfg.action_scale + cfg.default_angles
-            interface.send_target_joint_pos(target_dof_pos, kp=cfg.kps, kd=cfg.kds)
+            kps = None
+            if cfg.kps is not None:
+                kps = cfg.kps * float(cfg.kp_scale)
+            interface.send_target_joint_pos(target_dof_pos, kp=kps, kd=cfg.kds)
 
             tick += 1
 
