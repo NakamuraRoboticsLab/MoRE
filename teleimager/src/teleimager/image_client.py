@@ -28,8 +28,14 @@ import zmq
 import numpy as np
 import yaml
 import os
-import logging_mp
-logger_mp = logging_mp.get_logger(__name__, level=logging_mp.INFO)
+try:
+    import logging_mp  # type: ignore
+    logger_mp = logging_mp.get_logger(__name__, level=logging_mp.INFO)
+except ModuleNotFoundError:
+    import logging
+
+    logging.basicConfig(level=logging.INFO)
+    logger_mp = logging.getLogger(__name__)
 
 # ========================================================
 # Utility tools

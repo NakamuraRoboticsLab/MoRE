@@ -39,9 +39,15 @@ from pathlib import Path
 import queue
 import fractions
 from typing import Dict, Optional, Tuple, Any
-import logging_mp
-logging_mp.basic_config(level=logging_mp.INFO)
-logger_mp = logging_mp.get_logger(__name__)
+try:
+    import logging_mp  # type: ignore
+    logging_mp.basic_config(level=logging_mp.INFO)
+    logger_mp = logging_mp.get_logger(__name__)
+except ModuleNotFoundError:
+    import logging
+
+    logging.basicConfig(level=logging.INFO)
+    logger_mp = logging.getLogger(__name__)
 
 # ========================================================
 # cam_config_server.yaml path

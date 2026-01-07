@@ -11,5 +11,6 @@ dependencies:
       - transforms3d
       - pytorch3d
       - warp-lang
+      - logging_mp
       - opencv-python
       - wandb
