@@ -1,0 +1,62 @@
+# Real-world deploy config
+# Obs layout/scales are kept identical to deploy_mujoco/configs/g1_16dof_resi_moe.yaml
+
+policy_path: "./deploy/deploy_mujoco/models/high-knees_resi_policy.pt"
+
+# Control loop
+control_hz: 50
+run_duration_s: 0            # 0 means run forever
+
+# Normalization / scaling
+ang_vel_scale: 0.25
+dof_pos_scale: 1.0
+dof_vel_scale: 0.05
+action_scale: 0.25
+cmd_scale: [2.0, 2.0, 0.25]
+
+num_actions: 16
+num_obs: 60
+obs_history_len: 10
+
+# Default posture (same as training)
+default_angles: [ -0.1,  0.0,  0.0,  0.3, -0.2, 0.0,
+                  -0.1,  0.0,  0.0,  0.3, -0.2, 0.0,
+                  0.3, 0.8, 0.3, 0.8]
+
+# Optional PD gains (hardware side can use them)
+kps: [100, 100, 100, 150, 40, 40, 100, 100, 100, 150, 40, 40, 60, 40, 60, 40]
+kds: [2, 2, 2, 4, 2, 2, 2, 2, 2, 4, 2, 2, 2, 1, 2, 1]
+
+# Initial command
+cmd_init: [0.8, 0, 0]
+# Gait command vector (dimension defines `num_gaits`)
+gait_cmd: [1, 0, 0]
+
+# Depth handling (optional)
+# If your external interface provides depth, we apply the same preprocessing as MuJoCo deploy.
+# If it provides already-normalized depth in [-0.5, 0.5], set depth_image_is_normalized: true.
+depth_image_is_normalized: false
+
+depth_far_clip: 2
+# NOTE: MuJoCo deploy uses near_clip=0
+# If your depth camera has a minimum range, set it here.
+depth_near_clip: 0
+
+depth_buffer_len: 10
+cam_update_interval: 5
+
+# Camera randomization / filtering (kept for parity; typically disable on real if unwanted)
+crop_image: true
+crop_size: [10, 20, 10, 2]   # left, top, right, bottom
+
+gaussian_filter: false
+gaussian_filter_kernel: 5
+gaussian_filter_sigma: 1.5
+
+gaussian_noise: false
+gaussian_noise_std: 0.05
+
+depth_dis_noise: 0
+
+# Visualization (optional)
+visualize_depth: false

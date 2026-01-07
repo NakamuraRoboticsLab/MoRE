@@ -1,0 +1,101 @@
+# Example: deploy MoRE policy on Unitree robot via unitree_sdk2py (DDS)
+# This keeps the SAME obs layout/scales as MuJoCo deploy.
+
+# --- Policy ---
+policy_path: "./deploy/deploy_mujoco/models/high-knees_resi_policy.pt"
+
+# --- Control loop ---
+control_hz: 50
+run_duration_s: 0
+
+# --- Obs scaling (same as MuJoCo) ---
+ang_vel_scale: 0.25
+dof_pos_scale: 1.0
+dof_vel_scale: 0.05
+action_scale: 0.25
+cmd_scale: [2.0, 2.0, 0.25]
+
+num_actions: 16
+num_obs: 60
+obs_history_len: 10
+
+# Default posture (same as training)
+default_angles: [ -0.1,  0.0,  0.0,  0.3, -0.2, 0.0,
+                  -0.1,  0.0,  0.0,  0.3, -0.2, 0.0,
+                  0.3, 0.8, 0.3, 0.8]
+
+# Optional PD gains for the controlled joints
+kps: [100, 100, 100, 150, 40, 40, 100, 100, 100, 150, 40, 40, 60, 40, 60, 40]
+kds: [2, 2, 2, 4, 2, 2, 2, 2, 2, 4, 2, 2, 2, 1, 2, 1]
+
+# Commands / gait
+cmd_init: [0.0, 0.0, 0.0]
+# gait_cmd dimension defines num_gaits used in obs
+gait_cmd: [1, 0, 0]
+
+# Depth (optional; only if your interface provides depth)
+depth_image_is_normalized: false
+
+depth_far_clip: 2
+depth_near_clip: 0
+
+depth_buffer_len: 10
+cam_update_interval: 5
+
+crop_image: true
+crop_size: [10, 20, 10, 2]
+
+gaussian_filter: false
+gaussian_filter_kernel: 5
+gaussian_filter_sigma: 1.5
+
+gaussian_noise: false
+gaussian_noise_std: 0.05
+
+depth_dis_noise: 0
+
+visualize_depth: false
+
+# --- Unitree SDK2 (DDS) specific ---
+# Use with: --interface unitree_sdk2
+net_interface: "enp3s0"  # change to your NIC name
+msg_type: "hg"           # g1/h1_2 often use hg, h1 often uses go
+imu_type: "pelvis"       # pelvis or torso
+lowcmd_topic: "rt/lowcmd"
+lowstate_topic: "rt/lowstate"
+
+# Map policy joint order -> motor index in LowState/LowCmd
+# IMPORTANT: you must set this to match your robot motor ordering and your trained joint ordering.
+# Placeholder assumes first 16 motors correspond to the 16 controlled joints.
+joint2motor_idx: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]
+
+# Startup/safety flow (same as unitree_ref)
+require_remote: true
+control_dt: 0.02
+move_to_default_s: 2.0
+
+# Use remote joystick to generate cmd (vx, vy, wz)
+use_remote_cmd: true
+remote_max_cmd: [0.8, 0.5, 1.57]
+
+# --- TeleImager depth (optional) ---
+# If you run teleimager-server on the robot (or a camera host), you can attach depth into ObsPacket.
+# This matches a common server config:
+# - head_camera.depth_image_shape: [480, 640]
+# - head_camera.enable_depth_zmq: true
+# - head_camera.depth_zmq_port: 55560
+# NOTE: the depth port is discovered via teleimager's config request API, so you don't need to set it here.
+teleimager_host: "192.168.123.164"         # change to your teleimager-server host IP
+teleimager_request_port: 60000
+teleimager_cam_topic: "head_camera"        # must match teleimager config key
+teleimager_depth_unit_scale_m: 0.001        # uint16(z16) -> meters; set to your RealSense depth scale if different
+teleimager_downsample_hw: [64, 64]          # directly downsample depth to 64x64 before policy
+
+# Optional: hold extra motors at fixed targets (e.g. arms)
+# fixed_motors:
+#   - motor_idx: 16
+#     q: 0.0
+#     qd: 0.0
+#     kp: 50
+#     kd: 1
+#     tau: 0
