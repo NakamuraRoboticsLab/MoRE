@@ -46,8 +46,9 @@ depth_near_clip: 0
 depth_buffer_len: 10
 cam_update_interval: 5
 
+# Center-crop 640x480 -> 480x480 (crop 80px on left/right), then resize to 64x64.
 crop_image: true
-crop_size: [10, 20, 10, 2]
+crop_size: [80, 0, 80, 0]
 
 gaussian_filter: false
 gaussian_filter_kernel: 5
@@ -130,7 +131,10 @@ teleimager_host: "192.168.123.164"         # change to your teleimager-server ho
 teleimager_request_port: 60000
 teleimager_cam_topic: "head_camera"        # must match teleimager config key
 teleimager_depth_unit_scale_m: 0.001        # uint16(z16) -> meters; set to your RealSense depth scale if different
-teleimager_downsample_hw: [64, 64]          # directly downsample depth to 64x64 before policy
+# IMPORTANT:
+# Leave this as null so deploy-side cropping/resizing runs on the original 640x480 depth
+# (avoids aspect-ratio distortion and makes crop_size meaningful).
+teleimager_downsample_hw: null
 
 # Optional: hold extra motors at fixed targets (e.g. arms)
 # fixed_motors:

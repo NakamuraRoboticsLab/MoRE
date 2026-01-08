@@ -169,11 +169,21 @@ def process_depth_image_np(depth_image: np.ndarray, cfg: DeployConfig) -> torch.
     if cfg.crop_image:
         clip_left, clip_top, clip_right, clip_bottom = [int(x) for x in cfg.crop_size]
         h, w = depth_t.shape
-        left = clip_left
-        right = w - clip_right
-        top = clip_top
-        bottom = h - clip_bottom
-        depth_t = depth_t[top:bottom, left:right]
+        # Clamp crop values to avoid empty tensors.
+        left = max(0, clip_left)
+        top = max(0, clip_top)
+        right = w - max(0, clip_right)
+        bottom = h - max(0, clip_bottom)
+
+        # Ensure a valid crop region; if invalid, skip cropping.
+        if right <= left or bottom <= top:
+            # This can happen if the upstream depth is already downsampled (e.g., 64x64)
+            # but crop_size is configured for the original resolution.
+            depth_crop = depth_t
+        else:
+            depth_crop = depth_t[top:bottom, left:right]
+
+        depth_t = depth_crop
         depth_t = F.interpolate(
             depth_t.unsqueeze(0).unsqueeze(0),
             size=(64, 64),
@@ -181,6 +191,14 @@ def process_depth_image_np(depth_image: np.ndarray, cfg: DeployConfig) -> torch.
             align_corners=False,
         ).squeeze(0).squeeze(0)
     else:
+        # Center-crop to square first (avoid aspect-ratio distortion), then resize to 64x64.
+        h, w = depth_t.shape
+        if h != w:
+            side = int(min(h, w))
+            top = int((h - side) // 2)
+            left = int((w - side) // 2)
+            depth_t = depth_t[top : top + side, left : left + side]
+
         if tuple(depth_t.shape) != (64, 64):
             depth_t = F.interpolate(
                 depth_t.unsqueeze(0).unsqueeze(0),

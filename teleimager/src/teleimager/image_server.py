@@ -39,15 +39,9 @@ from pathlib import Path
 import queue
 import fractions
 from typing import Dict, Optional, Tuple, Any
-try:
-    import logging_mp  # type: ignore
-    logging_mp.basic_config(level=logging_mp.INFO)
-    logger_mp = logging_mp.get_logger(__name__)
-except ModuleNotFoundError:
-    import logging
-
-    logging.basicConfig(level=logging.INFO)
-    logger_mp = logging.getLogger(__name__)
+import logging_mp
+logging_mp.basic_config(level=logging_mp.INFO)
+logger_mp = logging_mp.get_logger(__name__)
 
 # ========================================================
 # cam_config_server.yaml path
@@ -347,14 +341,11 @@ class WebRTC_PublisherThread(threading.Thread):
         return web.Response(content_type="application/javascript", text=CLIENT_JS)
 
     async def _options(self, request):
-        return web.Response(
-            status=200,
-            headers={
-                "Access-Control-Allow-Origin": "*",
-                "Access-Control-Allow-Methods": "POST, GET, OPTIONS",
-                "Access-Control-Allow-Headers": "Content-Type",
-            }
-        )
+        return web.Response(headers={
+            "Access-Control-Allow-Origin": "*",
+            "Access-Control-Allow-Methods": "POST, GET, OPTIONS",
+            "Access-Control-Allow-Headers": "Content-Type",
+        })
 
     async def _offer(self, request: web.Request) -> web.Response:
         params = await request.json()
@@ -411,11 +402,7 @@ class WebRTC_PublisherThread(threading.Thread):
         return web.Response(
             content_type="application/json",
             text=json.dumps({"sdp": pc.localDescription.sdp, "type": pc.localDescription.type}),
-            headers={
-                "Access-Control-Allow-Origin": "*",
-                "Access-Control-Allow-Methods": "POST, OPTIONS",
-                "Access-Control-Allow-Headers": "Content-Type",
-            }
+            headers={"Access-Control-Allow-Origin": "*"}
         )
 
     async def _cleanup_pc(self, pc):
@@ -904,22 +891,29 @@ class BaseCamera:
 
 class RealSenseCamera(BaseCamera):
     def __init__(self, cam_topic, serial_number, img_shape, fps, 
-                 enable_zmq=True, zmq_port = 55555, enable_webrtc=False, webrtc_port=66666, webrtc_codec=None, enable_depth=False):
+                 enable_zmq=True, zmq_port = 55555, enable_webrtc=False, webrtc_port=66666, webrtc_codec=None, enable_depth=False,
+                 depth_img_shape=None, align_depth_to_color=True):
         rs = self.check_pyrealsense2_install()
         super().__init__(cam_topic, img_shape, fps, enable_zmq, zmq_port, enable_webrtc, webrtc_port, webrtc_codec)
         self._serial_number = serial_number
         self._enable_depth = enable_depth
+        self._depth_img_shape = depth_img_shape
+        self._align_depth_to_color = bool(align_depth_to_color)
         self._latest_depth = None
         try:
-            align_to = rs.stream.color
-            self.align = rs.align(align_to)
+            if self._align_depth_to_color:
+                align_to = rs.stream.color
+                self.align = rs.align(align_to)
+            else:
+                self.align = None
             self.pipeline = rs.pipeline()
             config = rs.config()
             config.enable_device(self._serial_number)
 
             config.enable_stream(rs.stream.color, self._img_shape[1], self._img_shape[0], rs.format.bgr8, self._fps)
             if self._enable_depth:
-                config.enable_stream(rs.stream.depth, self._img_shape[1], self._img_shape[0], rs.format.z16, self._fps)
+                depth_shape = self._depth_img_shape if self._depth_img_shape is not None else self._img_shape
+                config.enable_stream(rs.stream.depth, depth_shape[1], depth_shape[0], rs.format.z16, self._fps)
 
             profile = self.pipeline.start(config)
             self._device = profile.get_device()
@@ -931,6 +925,39 @@ class RealSenseCamera(BaseCamera):
                 self.g_depth_scale = depth_sensor.get_depth_scale()
 
             self.intrinsics = profile.get_stream(rs.stream.color).as_video_stream_profile().get_intrinsics()
+            self.depth_intrinsics = None
+            if self._enable_depth:
+                try:
+                    self.depth_intrinsics = profile.get_stream(rs.stream.depth).as_video_stream_profile().get_intrinsics()
+                except Exception:
+                    self.depth_intrinsics = None
+
+            def _intrinsics_to_fov_deg(intr, width: int, height: int):
+                fx = float(intr.fx)
+                fy = float(intr.fy)
+                fx = fx if fx != 0 else 1.0
+                fy = fy if fy != 0 else 1.0
+                fov_x = 2.0 * np.degrees(np.arctan2(width, 2.0 * fx))
+                fov_y = 2.0 * np.degrees(np.arctan2(height, 2.0 * fy))
+                return float(fov_x), float(fov_y)
+
+            try:
+                c_fovx, c_fovy = _intrinsics_to_fov_deg(self.intrinsics, self._img_shape[1], self._img_shape[0])
+                msg = (
+                    f"[RealSenseCamera] {self._cam_topic} color intrinsics FOV(deg): "
+                    f"fov_x={c_fovx:.2f}, fov_y={c_fovy:.2f} @ {self._img_shape[1]}x{self._img_shape[0]}"
+                )
+                if self._enable_depth and self.depth_intrinsics is not None:
+                    depth_shape = self._depth_img_shape if self._depth_img_shape is not None else self._img_shape
+                    d_fovx, d_fovy = _intrinsics_to_fov_deg(self.depth_intrinsics, depth_shape[1], depth_shape[0])
+                    msg += (
+                        f"; depth intrinsics FOV(deg): fov_x={d_fovx:.2f}, fov_y={d_fovy:.2f} @ {depth_shape[1]}x{depth_shape[0]}"
+                    )
+                msg += f"; align_depth_to_color={self._align_depth_to_color}"
+                logger_mp.info(msg)
+            except Exception as e:
+                logger_mp.warning(f"[RealSenseCamera] Failed to compute FOV from intrinsics: {e}")
+
             logger_mp.info(str(self))
         except Exception as e:
             if self.pipeline:
@@ -941,9 +968,13 @@ class RealSenseCamera(BaseCamera):
             raise RuntimeError(f"[RealSenseCamera] Failed to initialize RealSense camera {self._serial_number}: {e}")
 
     def __str__(self):
+        depth_shape = self._depth_img_shape if self._depth_img_shape is not None else self._img_shape
         return (
             f"[RealSenseCamera: {self._cam_topic}] initialized with "
             f"{self._img_shape[0]}x{self._img_shape[1]} @ {self._fps} FPS.\n"
+            f"Depth: {'enabled' if self._enable_depth else 'disabled'}"
+            f" ({depth_shape[0]}x{depth_shape[1]})"
+            f"; align_depth_to_color={self._align_depth_to_color}.\n"
             f"ZMQ: {'enabled, zmq_port=' + str(self._zmq_port) if self._enable_zmq else 'disabled'}; "
             f"WebRTC: {'enabled, webrtc_port=' + str(self._webrtc_port) if self._enable_webrtc else 'disabled'}"
         )
@@ -959,13 +990,15 @@ class RealSenseCamera(BaseCamera):
     
     def _update_frame(self):
         frames = self.pipeline.wait_for_frames()
-        aligned_frames = self.align.process(frames)
-        color_frame = aligned_frames.get_color_frame()
+        if self.align is not None:
+            frames = self.align.process(frames)
+
+        color_frame = frames.get_color_frame()
         if not color_frame:
             return None
 
         if self._enable_depth:   
-            depth_frame = aligned_frames.get_depth_frame()
+            depth_frame = frames.get_depth_frame()
             if depth_frame:
                 self._latest_depth = np.asanyarray(depth_frame.get_data())
             else:
@@ -1126,6 +1159,8 @@ class ImageServer:
         self._realsense_enable = realsense_enable
         self._stop_event = threading.Event()
         self._cameras: dict[str, BaseCamera] = {}
+        # Optional depth ZMQ publishing (separate port/channel per camera topic)
+        self._depth_zmq_ports: dict[str, int] = {}
         self._cam_finder = CameraFinder(realsense_enable, camera_finder_verbose)
         self._responser = ZMQ_Responser(self._cam_config)
         self._zmq_publisher_manager = ZMQ_PublisherManager.get_instance()
@@ -1143,6 +1178,20 @@ class ImageServer:
                 enable_webrtc = cam_cfg.get("enable_webrtc", False)
                 webrtc_port = cam_cfg.get("webrtc_port", None)
                 webrtc_codec = cam_cfg.get("webrtc_codec", None)
+
+                # Depth stream (RealSense only): publish depth on a separate ZMQ port.
+                # Supported config keys:
+                #   - enable_depth: bool (enables depth capture)
+                #   - enable_depth_zmq: bool (enables depth publish over ZMQ)
+                #   - depth_zmq_port: int (port to publish depth frames)
+                #   - depth_image_shape: [H, W] (optional depth resolution, independent from color)
+                #   - align_depth_to_color: bool (default True; set False to maximize depth FOV)
+                enable_depth = bool(cam_cfg.get("enable_depth", False) or cam_cfg.get("enable_depth_zmq", False))
+                enable_depth_zmq = bool(cam_cfg.get("enable_depth_zmq", False))
+                depth_zmq_port = cam_cfg.get("depth_zmq_port", None)
+                depth_img_shape = cam_cfg.get("depth_image_shape", None)
+                align_depth_to_color = cam_cfg.get("align_depth_to_color", True)
+
                 cam_type = cam_cfg.get("type", "uvc").lower()
                 img_shape = cam_cfg.get("image_shape", None)
                 fps = cam_cfg.get("fps", 30)
@@ -1191,7 +1240,16 @@ class ImageServer:
                         logger_mp.error(f"[Image Server] Cannot find RealSenseCamera for {cam_topic}")
                     else:
                         self._cameras[cam_topic] = RealSenseCamera(cam_topic, serial_number, img_shape, fps,
-                                                                   enable_zmq, zmq_port, enable_webrtc, webrtc_port, webrtc_codec)
+                                                                   enable_zmq, zmq_port, enable_webrtc, webrtc_port, webrtc_codec,
+                                                                   enable_depth=enable_depth,
+                                                                   depth_img_shape=depth_img_shape,
+                                                                   align_depth_to_color=align_depth_to_color)
+
+                        if enable_depth_zmq:
+                            if depth_zmq_port is None:
+                                logger_mp.error(f"[Image Server] {cam_topic} enable_depth_zmq=true but depth_zmq_port is not set.")
+                            else:
+                                self._depth_zmq_ports[cam_topic] = int(depth_zmq_port)
 
                 elif cam_type == "uvc":
                     uid = None
@@ -1283,6 +1341,38 @@ class ImageServer:
         except Exception as e:
             logger_mp.error(f"[Image Server] Failed to publish zmq frame from {cam_topic} camera.")
             self._stop_event.set()
+
+    def _depth_zmq_pub(self, cam_topic: str, camera: BaseCamera, port: int):
+        """Publish depth frames (uint16 raw bytes) over a separate ZMQ port."""
+        try:
+            interval = 1.0 / camera.get_fps()
+            next_frame_time = time.monotonic()
+            miss_count = 0
+            max_miss = int(camera.get_fps() * 3) if camera.get_fps() else 90  # ~3s
+
+            while not self._stop_event.is_set():
+                depth_bytes = camera.get_depth_frame()
+                if depth_bytes is not None:
+                    self._zmq_publisher_manager.publish(depth_bytes, port)
+                    miss_count = 0
+                else:
+                    # Depth may not be enabled yet / temporarily unavailable.
+                    miss_count += 1
+                    if miss_count == 1 or miss_count % 30 == 0:
+                        logger_mp.warning(f"[Image Server] {cam_topic} returned no depth frame (miss={miss_count}).")
+                    if miss_count >= max_miss:
+                        logger_mp.error(f"[Image Server] {cam_topic} depth stream unavailable; stopping depth publisher on port {port}.")
+                        break
+
+                next_frame_time += interval
+                sleep_time = next_frame_time - time.monotonic()
+                if sleep_time > 0:
+                    time.sleep(sleep_time)
+                else:
+                    next_frame_time = time.monotonic()
+        except Exception:
+            logger_mp.error(f"[Image Server] Failed to publish zmq depth frame from {cam_topic} camera.")
+            # Do not kill the whole server for depth publishing failures.
     
     def _webrtc_pub(self, cam_topic: str, camera: BaseCamera):
         try:
@@ -1366,6 +1456,13 @@ class ImageServer:
                 t.start()
                 self._publisher_threads.append(t)
 
+            # Optional depth ZMQ publishing (separate port)
+            if camera_topic in self._depth_zmq_ports:
+                depth_port = self._depth_zmq_ports[camera_topic]
+                t = threading.Thread(target=self._depth_zmq_pub, args=(camera_topic, camera, depth_port), daemon=True)
+                t.start()
+                self._publisher_threads.append(t)
+
     def wait(self):
         self._stop_event.wait()
         self._clean_up()
@@ -1379,21 +1476,6 @@ class ImageServer:
 def signal_handler(server, signum, frame):
     logger_mp.info(f"[Image Server] Received signal {signum}, initiating graceful shutdown...")
     server.stop()
-
-def set_performance_mode(cores=[0, 1, 2]):
-    import psutil
-    try:
-        p = psutil.Process(os.getpid())
-        
-        # Set CPU affinity for the process and all its threads
-        p.cpu_affinity(cores)
-        logger_mp.info(f"[Performance] CPU Affinity locked to: {cores}")
-
-    except psutil.AccessDenied:
-        logger_mp.warning("[Performance] Access Denied: Run as sudo for full optimization")
-    except Exception as e:
-        logger_mp.error(f"[Performance] Error: {e}")
-
 
 def main():
     logger_mp.info(
@@ -1420,11 +1502,7 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--cf', action = 'store_true', help = 'Enable camera found mode, print all connected cameras info')
     parser.add_argument('--rs', action = 'store_true', help = 'Enable RealSense camera mode. Otherwise only find UVC/OpenCV cameras.')
-    parser.add_argument('--no-affinity', action='store_false', dest='affinity', help='Disable CPU affinity setting for performance optimization.')
     args = parser.parse_args()
-
-    if args.affinity:
-        set_performance_mode(cores=[0, 1, 2])
 
     # if enable camera finder mode, just print cameras info and exit
     if args.cf:
