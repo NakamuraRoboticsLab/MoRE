@@ -30,7 +30,7 @@ kps: [100, 100, 100, 150, 40, 40, 100, 100, 100, 150, 40, 40, 60, 40, 60, 40]
 kds: [2, 2, 2, 4, 2, 2, 2, 2, 2, 4, 2, 2, 2, 1, 2, 1]
 
 # Scale factor applied to `kps` when sending commands
-kp_scale: 1
+kp_scale: 0
 
 # Commands / gait
 cmd_init: [0.0, 0.0, 0.0]
@@ -109,7 +109,7 @@ use_remote_cmd: true
 remote_max_cmd: [0.8, 0.5, 1.57]
 
 # Debug: print received remote state (buttons + sticks)
-debug_remote: true
+debug_remote: false
 debug_remote_interval_s: 0.5
 
 # If START/A/SELECT mapping is different on your remote,

@@ -267,6 +267,7 @@ def main() -> None:
     trajectory_history = torch.zeros(size=(1, cfg.obs_history_len, cfg.num_obs - num_gaits), dtype=torch.float32)
     depth_image_buffer = torch.zeros(1, cfg.depth_buffer_len, 64, 64, dtype=torch.float32)
     depth_buf_initialized = False
+    depth_checked = True
 
     control_dt = 1.0 / cfg.control_hz
     start_wall = time.monotonic()
@@ -325,6 +326,20 @@ def main() -> None:
             # Depth buffer update (optional)
             if (tick % cfg.cam_update_interval) == 0 and pkt.depth_image is not None:
                 depth_raw = np.asarray(pkt.depth_image)
+
+                if not depth_checked:
+                    depth_checked = True
+                    arr_min = float(np.nanmin(depth_raw))
+                    arr_max = float(np.nanmax(depth_raw))
+                    is_float = depth_raw.dtype.kind == "f"
+                    guess_norm = is_float and arr_min >= -1.5 and arr_max <= 1.5
+                    print(
+                        "[depth-check] dtype="
+                        f"{depth_raw.dtype} min={arr_min:.4f} "
+                        f"max={arr_max:.4f} "
+                        f"normalized_guess={guess_norm}"
+                    )
+
                 depth_t = process_depth_image_np(depth_raw, cfg)
                 if not depth_buf_initialized:
                     depth_image_buffer = torch.stack([depth_t] * cfg.depth_buffer_len, dim=0).unsqueeze(0)
@@ -339,18 +354,10 @@ def main() -> None:
                     cv2 = _maybe_import_cv2()
                     if cv2 is not None:
                         cv2.namedWindow("depth image", cv2.WINDOW_NORMAL)
-                        raw = depth_raw.astype(np.float32, copy=False)
-                        if cfg.depth_image_is_normalized:
-                            img01 = np.clip(raw + 0.5, 0.0, 1.0)
-                        else:
-                            denom = float(cfg.depth_far_clip - cfg.depth_near_clip)
-                            denom = denom if denom != 0.0 else 1.0
-                            raw_clip = np.clip(raw, cfg.depth_near_clip, cfg.depth_far_clip)
-                            img01 = (raw_clip - cfg.depth_near_clip) / denom
-
-                        img_u8 = (img01 * 255.0).astype(np.uint8)
-                        img_color = cv2.applyColorMap(img_u8, cv2.COLORMAP_TURBO)
-                        cv2.imshow("depth image", img_color)
+                        # Match MuJoCo viewer style: show normalized buffer frame as grayscale
+                        img = depth_image_buffer[0, -1].detach().cpu().numpy() + 0.5
+                        img = np.clip(img, 0.0, 1.0)
+                        cv2.imshow("depth image", img)
                         cv2.waitKey(1)
 
             # Trajectory history (exclude gait_cmd part)
